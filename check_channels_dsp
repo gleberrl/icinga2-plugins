@@ -1,0 +1,199 @@
+#!/bin/bash
+
+############################### check_channels_dsp ###############################
+# Version : 1.0                                                                  #
+# Date : 01 Jun 2016                                                             #
+# Author : Daniel Arruda Frederico Ramos (daniel.arruda.ramos@gmail.com)         #
+# Contributor(s): Gleber Ribeiro Leite (gleberrl@yahoo.com.br)                   #
+##################################################################################
+#                                                                                #
+# Help : ./check_channels_dsp -h                                                 #
+#                                                                                #
+##################################################################################
+
+#Declare variables
+warning=""
+community="0"
+ip="0"
+critical=0
+ACTIVE_CHANNELS=0
+ACTIVE_CHANNELS1=0
+ACTIVE_CHANNELS2=0
+STOPPED_CHANNELS=0
+offHOOK=0
+
+#Create argument(s)
+while getopts ":hC:H:w:c:p:" optname
+        do
+                case "$optname" in
+                        "h")
+                                printf "\nUsage: check_channels_dsp -H [IP ADDRESS] -C [COMMUNITY] -c [CRITICAL VALUE] -p [TYPE VOICE PORTS - 1/2/3]\n\n-H --> IP ADDRESS\n-C --> COMMUNITY SNMP_V2\n-w --> WARNING VALUE [OPTIONAL]\n-c --> CRITICAL VALUE\n\n-p --> TYPE VOICE PORTS        1 - E1\n                               2 - FXO/FXS\n                               3 - FXO/FXS + E1 or E1 DIGITAL + E1 ANALOG\n"
+                                exit
+                        ;;
+                        "C")
+                                community=$OPTARG
+                        ;;
+                        "H")
+                                ip=$OPTARG
+                        ;;
+                        "w")
+                                warning=$OPTARG
+                        ;;
+                        "c")
+                                critical=$OPTARG
+                        ;;
+                        "p")
+				vCard=$OPTARG
+                        ;;
+                        \?)
+                                printf "\nUnknown option argument: \"-$OPTARG\"\nMore info with \"check_channels_dsp -h\"\n\n" >&2
+                                exit 2;
+                        ;;
+                esac
+        done
+
+
+#Check the required argument(s)
+if [[ $community != "0"  &&  $ip != "0"  &&  $critical -ne 0 && $vCard != "" ]]; then
+
+#Get number of active calls
+        ACTIVE_CALLS=`snmpwalk -v 2c -c $community $ip 1.3.6.1.4.1.9.9.63.1.3.2.1.1 | grep Hex | wc -l`
+#Create ARRAY 
+        declare -a CHANNEL_DSP
+
+#Calculate number of active voice channels
+	if [[ "$vCard" == "1" || "$vCard" == "3" ]]; then
+                NUM_MODELS=`snmpwalk -v 2c -c $community $ip .1.3.6.1.4.1.9.10.19.1.1.9.1.3.0 -Ov | wc -l`
+                i=0
+
+                while [ $i -lt $NUM_MODELS ]; do
+                        aux1=$(($i+1))
+			aux2=`snmpwalk -v 2c -c $community $ip .1.3.6.1.4.1.9.10.19.1.1.9.1.3 | awk -F . '{ print $10 }' | awk '{printf("%s", $0 (NR==1 ? " " : " "))}' | awk -v "x=$aux1" '{print $x}'`
+                        CHANNEL_DSP[$i]=`snmpwalk -v 2c -c $community $ip .1.3.6.1.4.1.9.10.19.1.1.9.1.3."$aux2".$i -Ov | awk '{ print $2 }'`
+                        ACTIVE_CHANNELS1=$(( $ACTIVE_CHANNELS1 + ${CHANNEL_DSP[$i]} ))
+                        i=$(($i+1))
+                done
+	fi
+
+	if [[ "$vCard" == "2" || "$vCard" == "3" ]]; then
+                NUM_MODELS=`snmpwalk -v 2c -c $community $ip .1.3.6.1.4.1.9.9.86.1.2.1.1.8  -Ov | wc -l`
+
+                if [ $NUM_MODELS -ne 1 ]; then
+                        aux3=`snmpwalk -v 2c -c $community $ip .1.3.6.1.4.1.9.9.86.1.2.1.1.8 | awk '{ print $1}' | awk -F . '{print $10}' | awk '{printf("%s", $0 (NR==1 ? " " : " "))}' | awk '{print $NF}'` #Get the last OID position
+			i=`snmpwalk -v 2c -c $community $ip .1.3.6.1.4.1.9.9.86.1.2.1.1.8 | awk '{ print $1}' | awk -F . '{print $10}' | awk '{printf("%s", $0 (NR==1 ? " " : " "))}' | awk '{print $1}'` #Get the first OID position
+
+                        while [ $i -le $aux3 ]; do
+                                CHANNEL_DSP[$i]=`snmpwalk -v 2c -c $community $ip .1.3.6.1.4.1.9.9.86.1.2.1.1.8.$i  -Ov | awk '{ print $2 }'`
+                                if [[ ${CHANNEL_DSP[$i]} != "Such" ]]; then
+                                ACTIVE_CHANNELS2=$(( $ACTIVE_CHANNELS2 + ${CHANNEL_DSP[$i]} ))
+                                fi
+                                i=$(( $i + 1))
+                        done
+                else
+                        ACTIVE_CHANNELS2=`snmpwalk -v 2c -c $community $ip .1.3.6.1.4.1.9.9.86.1.2.1.1.8  -Ov | awk '{ print $2 }'`
+                fi
+
+		if [ $ACTIVE_CHANNELS2 -ne 0 ]; then
+                        if [ $vCard == "3" ]; then
+				aux4=$(($ACTIVE_CHANNELS2/2))
+
+				if [ $aux4 -eq $ACTIVE_CHANNELS1 ]; then
+	                                ACTIVE_CHANNELS2=0
+				else
+					aux5=$(($ACTIVE_CHANNELS1*2))
+					ACTIVE_CHANNELS2=$(($ACTIVE_CHANNELS2-$aux5))
+				fi
+                        fi
+
+			if [ $ACTIVE_CHANNELS2 -ne 0 ]; then
+				aux6=$(($ACTIVE_CHANNELS2%2))
+				if [[ $aux6 -ne 0 && $vCard == "2" ]]; then
+					ACTIVE_CHANNELS2=$(($ACTIVE_CHANNELS2+1))
+				fi
+					ACTIVE_CHANNELS2=$(($ACTIVE_CHANNELS2/2))
+			fi
+		fi
+
+#Calculate number of active port channels (device Off Hook) to FXS voice card
+		if [ `snmpwalk -v 2c -c $community $ip .1.3.6.1.4.1.9.9.62.1.4.2.1.1 -Ov | wc -l` -gt 1 ]; then
+
+			FXSf=`snmpwalk -v 2c -c $community $ip .1.3.6.1.4.1.9.9.62.1.4.2.1.1 | awk '{ print $1}' | awk -F . '{print $10}' | awk '{printf("%s", $0 (NR==1 ? " " : " "))}' | awk '{print $1}'` #Get the first OID position
+			FXSl=`snmpwalk -v 2c -c $community $ip .1.3.6.1.4.1.9.9.62.1.4.2.1.1 | awk '{ print $1}' | awk -F . '{print $10}' | awk '{printf("%s", $0 (NR==1 ? " " : " "))}' | awk '{print $NF}'` #Get the last OID position
+
+			while [ $FXSf -le $FXSl ]; do
+				if [ `snmpwalk -v 2c -c $community $ip .1.3.6.1.4.1.9.9.62.1.4.2.1.1.$FXSf -Ov | awk '{ print $2 }'` -eq 2 ]; then
+					offHOOK=$(($offHOOK+1))
+				fi
+				FXSf=$(($FXSf+1))
+			done
+		fi
+
+#Calculate number of active port channels (device Off Hook) to FXO voice card
+		if [ `snmpwalk -v 2c -c $community $ip .1.3.6.1.4.1.9.9.62.1.3.2.1.1 -Ov | wc -l` -gt 1 ]; then
+
+			FXOf=`snmpwalk -v 2c -c $community $ip .1.3.6.1.4.1.9.9.62.1.3.2.1.1 | awk '{ print $1}' | awk -F . '{print $10}' | awk '{printf("%s", $0 (NR==1 ? " " : " "))}' | awk '{print $1}'` #Get the first OID position
+			FXOl=`snmpwalk -v 2c -c $community $ip .1.3.6.1.4.1.9.9.62.1.3.2.1.1 | awk '{ print $1}' | awk -F . '{print $10}' | awk '{printf("%s", $0 (NR==1 ? " " : " "))}' | awk '{print $NF}'` #Get the last OID position
+
+			while [ $FXOf -le $FXOl ]; do
+				if [ `snmpwalk -v 2c -c $community $ip .1.3.6.1.4.1.9.9.62.1.3.2.1.1.$FXOf -Ov | awk '{ print $2 }'` -eq 2 ]; then
+					offHOOK=$(($offHOOK+1))
+				fi
+				FXOf=$(($FXOf+1))
+			done
+		fi
+
+	fi
+	if [[ "$vCard" != "1" && "$vCard" != "2" && "$vCard" != "3" ]]; then
+                printf "Unknown option -p= $vCard\n\nMore info with \"check_channels_dsp -h\"\n\n"
+                exit 1;
+        fi
+
+#Calculate how many voice channels are locked
+
+        ACTIVE_CHANNELS=$(($ACTIVE_CHANNELS1+$ACTIVE_CHANNELS2))
+
+	if [[ "$vCard" == "1"  || "$vCard" == "3" ]]; then
+
+	        STOPPED_CHANNELS=$(($STOPPED_CHANNELS+$ACTIVE_CHANNELS-$ACTIVE_CALLS))
+
+		if [ "$vCard" == "1" ]; then
+			offHOOK=$ACTIVE_CHANNELS
+		fi
+	fi
+
+	if [[ "$vCard" == "2" || "$vCard" == "3" ]]; then
+		if [ $offHOOK -ne 0 ]; then
+			STOPPED_CHANNELS=$(($STOPPED_CHANNELS+$offHOOK-$ACTIVE_CALLS))
+		elif [[ "$offHOOK" == 0 && "$offHOOK" != "$ACTIVE_CHANNELS" ]]; then
+			offHOOK=$ACTIVE_CHANNELS
+		fi
+	fi
+
+#Possibles outputs
+        if [ $STOPPED_CHANNELS -ge $critical ]; then #If locked channels are greater than critical value
+
+                echo "CRITICAL;STOPPED CHANNELS = $STOPPED_CHANNELS;ACTIVE CALLS = $ACTIVE_CALLS;ACTIVE DSP CHANNELS = $ACTIVE_CHANNELS;ACTIVE PORT CHANNELS= $offHOOK | STOPPED_CHANNELS $SERVICEOUTPUT$=$STOPPED_CHANNELS ACTIVE_CALLS $SERVICEOUTPUT1$=$ACTIVE_CALLS"
+                exit 2;
+
+        elif [ $STOPPED_CHANNELS -eq 0 ]; then #If locked channels are equal zero
+
+                echo "OK;STOPPED CHANNELS = $STOPPED_CHANNELS;ACTIVE CALLS = $ACTIVE_CALLS;ACTIVE DSP CHANNELS = $ACTIVE_CHANNELS;ACTIVE PORT CHANNELS= $offHOOK | STOPPED_CHANNELS $SERVICEOUTPUT$=$STOPPED_CHANNELS ACTIVE_CALLS $SERVICEOUTPUT1$=$ACTIVE_CALLS"
+                exit 0;
+
+        elif [ $STOPPED_CHANNELS == $warning ]; then  #If locked channels are equal than warning value
+
+                echo "WARNING;STOPPED CHANNELS = $STOPPED_CHANNELS;ACTIVE CALLS = $ACTIVE_CALLS;ACTIVE DSP CHANNELS = $ACTIVE_CHANNELS;ACTIVE PORT CHANNELS= $offHOOK | STOPPED_CHANNELS $SERVICEOUTPUT$=$STOPPED_CHANNELS ACTIVE_CALLS $SERVICEOUTPUT1$=$ACTIVE_CALLS"
+                exit 1;
+
+	else
+
+		echo "Error\nSTOPPED CHANNELS = $STOPPED_CHANNELS\nACTIVE CALLS = $ACTIVE_CALLS\nACTIVE DSP CHANNELS = $ACTIVE_CHANNELS\nACTIVE PORT CHANNELS= $offHOOK | STOPPED_CHANNELS $SERVICEOUTPUT$=$STOPPED_CHANNELS ACTIVE_CALLS $SERVICEOUTPUT1$=$ACTIVE_CALLS"
+		exit 3;
+
+        fi
+
+else #Output when no arguments
+
+        printf "\nUsage: check_channels_dsp -H [IP ADDRESS] -C [COMMUNITY] -c [CRITICAL VALUE] -p [TYPE VOICE PORTS - 1/2/3]\n\nMore info with \"check_channels_dsp -h\"\n\n"
+	exit 1;
+fi
