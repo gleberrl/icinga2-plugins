@@ -1,0 +1,118 @@
+#!/usr/bin/ksh
+
+############################### check_snmp_enterasys_poe #########################
+# Version : 1.0                                                                  #
+# Date : 01 Jun 2016                                                             #
+# Author : Gleber Ribeiro Leite (gleberrl@yahoo.com.br)                          #
+# Contributor(s):                                                                #
+##################################################################################
+#                                                                                #
+# Help : ./check_snmp_enterasys_poe -h                                           #
+#                                                                                #
+##################################################################################
+
+#Declare variables
+warning=""
+community="0"
+ip="0"
+critical=0
+snmp_version=0
+protocol_security=""
+authentication_passphrase=""
+security_level=""
+protocol_key=""
+protocol_passphrase=""
+username=""
+
+#Create argument(s)
+while getopts ":hC:H:w:c:p:v:a:A:l:x:X:u:" optname
+        do
+                case "$optname" in
+                        "h")
+                                printf "\nUsage: check_snmp_enterasys_poe -H [IP ADDRESS] -C [COMMUNITY] -c [CRITICAL VALUE] -v [SNMP_Version - 2/3]\n\n-H --> IP ADDRESS\n-C --> COMMUNITY SNMP_V2\n-v --> SNMP Version\n-w --> WARNING VALUE [OPTIONAL]\n-c --> CRITICAL VALUE\n=====If SNMP_V3=====\n-a --> protocol (MD5/SHA)\n-A --> Authentication PASSPHRASE\n-l --> security level (noAuthNoPriv|authNoPriv|authPriv)\n-x --> Protocol (DES|AES)\n-X --> Protocol PASSPHRASE\n-u --> Username (Security Username)\n\n"
+                                exit
+                        ;;
+                        "C")
+                                community=$OPTARG
+                        ;;
+                        "H")
+                                ip=$OPTARG
+                        ;;
+                        "v")
+                                snmp_version=$OPTARG
+                        ;;
+                        "a")
+                                protocol_security=$OPTARG
+                        ;;
+                        "A")
+                                authentication_passphrase=$OPTARG
+                        ;;
+                        "l")
+                                security_level=$OPTARG
+                        ;;
+                        "x")
+                                protocol_key=$OPTARG
+                        ;;
+                        "X")
+                                protocol_passphrase=$OPTARG
+                        ;;
+                        "u")
+                                username=$OPTARG
+                        ;;
+                        "w")
+                                warning=$OPTARG
+                        ;;
+                        "c")
+                                critical=$OPTARG
+                        ;;
+                        \?)
+                                printf "\nUnknown option argument: \"-$OPTARG\"\nMore info with \"check_snmp_enterasys_poe -h\"\n\n" >&2
+                                exit 2;
+                        ;;
+                esac
+        done
+
+
+#Check the required argument(s)
+if [[ $community != "0"  &&  $ip != "0"  &&  $snmp_version == "2" ]]; then
+
+	POE_WATTS=`snmpwalk $ip -v2c $community SNMPv2-SMI::enterprises.5624.1.2.50.1.5.1.1.2 | awk '{ s+=$4} END {printf "%.2f", s}'`
+
+fi
+
+if [[ $ip != "0"  &&  $snmp_version == "3" ]]; then
+
+	POE_WATTS=`snmpwalk $ip -v $snmp_version -a $protocol_security -A $authentication_passphrase -l $security_level -x $protocol_key -X $protocol_passphrase -u $username SNMPv2-SMI::enterprises.5624.1.2.50.1.5.1.1.2 | awk '{ s+=$4} END {printf "%.2f", s}'`
+
+fi
+
+(( POE_TOTAL = $POE_WATTS / 1000.00 ))
+
+#Possibles outputs
+        if [ $POE_TOTAL -gt $warning ]; then 
+
+                echo "OK;POE TOTAL WATTS = $POE_TOTAL W | W $SERVICEOUTPUT$=$POE_TOTAL"
+                exit 0;
+
+        elif [[ $POE_TOTAL -le $warning && $POE_TOTAL -gt $critical ]]; then  #If locked channels are equal than warning value
+
+                echo "WARNING;POE TOTAL WATTS = $POE_TOTAL W | W $SERVICEOUTPUT$=$POE_TOTAL"
+                exit 1;
+
+        elif [ $POE_TOTAL -le $critical ]; then #If locked channels are greater than critical value
+
+                echo "CRITICAL;POE TOTAL WATTS = $POE_TOTAL W | W $SERVICEOUTPUT$=$POE_TOTAL"
+                exit 2;
+
+	else
+
+		echo "Error\nPOE TOTAL WATTS = $POE_TOTAL W | W $SERVICEOUTPUT$=$POE_TOTAL"
+		exit 3;
+
+        fi
+
+else #output when no arguments
+
+        printf "\nUsage: check_snmp_enterasys_poe -h \n\n"
+	exit 1;
+fi
